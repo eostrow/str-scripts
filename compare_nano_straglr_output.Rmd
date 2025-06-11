@@ -1,0 +1,337 @@
+---
+title: "R Notebook"
+output: 
+  html_notebook: 
+    toc: yes
+editor_options: 
+  chunk_output_type: inline
+---
+
+Compare STR calls using different software (NanoRepeat, EPI2ME-straglr). Also compare STR calls for individuals in a trio to check for Mendelian inheritance.
+
+```{r}
+
+library(tidyverse)
+library(paletteer)
+library(cowplot)
+library(paletteer)
+
+```
+
+```{r}
+
+setwd("/nesi/nobackup/uoa04099/benchmarking_STRs/")
+mydir = "/nesi/nobackup/uoa04099/benchmarking_STRs/"
+id = "HG005"
+
+fname_nano = paste(mydir, id, "_nanorepeat_summarised.tsv", sep="")
+fname_straglr = paste(mydir, id, "_straglr_summarised.tsv", sep="")
+outfname = paste(mydir, "compare_outputs/", id, "_straglr_nano_compare.tsv", sep="")
+
+in_nano = read.table(fname_nano,header=T, sep="\t")
+in_straglr = read.table(fname_straglr,header=T, sep="\t")
+
+```
+
+##### Inner-join of straglr and nanorepeat results
+Output is table with one locus per line, showing allele sizes for nanorepeat and straglr
+
+Note that the result is a list of those loci that appear in both lists (nano and straglr) A bunch of loci were lost in the pipeline (62 input: 48 straglr, 47 nano)
+
+```{r}
+straglr = in_straglr %>% select(chr, start_pos, end_pos, gene, status, min_path, allele1, allele2, max_normal, min_path) %>% rowwise() %>% mutate(strg_a1=min(allele1, allele2)) %>% mutate(strg_a2=max(allele1, allele2))
+
+straglr$start_pos = straglr$start_pos-1
+nano = in_nano
+names(nano)[5:7] = c("nano_num_alleles", "nano_a1", "nano_a2")
+out = inner_join(straglr, nano, join_by(start_pos==start))
+out = out %>% select(gene, motif, chr.x, start_pos, end_pos, nano_a1, nano_a2, strg_a1, strg_a2, nano_num_alleles, max_normal, min_path, status)
+names(out)[3]="chr"
+
+write_tsv(out, outfname)
+
+
+```
+
+
+Read in files for all individuals genotyped, calculate difference in allele size for nano and straglr
+
+```{r}
+
+list_of_files <- list.files(path = "/nesi/nobackup/uoa04099/benchmarking_STRs/compare_outputs", recursive = TRUE, pattern = "\\.tsv$", full.names = TRUE)
+
+df <- readr::read_tsv(list_of_files, id = "file_name")
+
+pattern1="/nesi/nobackup/uoa04099/benchmarking_STRs/compare_outputs/"
+pattern2= "_straglr_nano_compare.tsv"
+
+df2 = df %>% mutate(a1_diff = nano_a1 - strg_a1, a2_diff = nano_a2 - strg_a2, id_temp = gsub(pattern1, "", file_name)) %>% mutate(id = gsub(pattern2, "", id_temp))
+
+
+```
+
+Make plot
+
+```{r}
+
+
+# Reorder data using average? Learn more about reordering in chart #267
+df3 <- df2 %>% 
+  rowwise() %>%
+  group_by(gene) %>%
+  mutate( mymean = mean(c(a1_diff,a2_diff) )) %>% 
+  arrange(mymean) %>% 
+  mutate(gene=factor(gene))
+
+
+# Plot
+p1 = ggplot(df3) +
+  geom_segment(aes(x=fct_rev(gene), xend=gene, y=a1_diff, yend=a2_diff),color="grey") +
+  geom_hline(yintercept=0,lty=3) +
+  geom_point(aes(x=fct_rev(gene), y=a1_diff,col=id), alpha=0.5, size=3 ) +
+  geom_point(aes(x=fct_rev(gene), y=a2_diff, col=id), alpha=0.6, size=3 ) +
+  #scale_color_paletteer_d("lisa::AndyWarhol_2") +
+  scale_color_paletteer_d("rcartocolor::Antique")+
+  coord_flip()+
+  theme_cowplot() +
+  theme(legend.position = "right") +
+  xlab("") +
+  ylab("Allele size difference (nano - straglr)")
+
+save_plot('/nesi/nobackup/uoa04099/benchmarking_STRs/nano_straglr_compare_5.pdf', p1, base_height=10, base_width=7)
+
+```
+
+
+```{r}
+
+p2temp = ggplot(df3) +
+  geom_segment(aes(x=fct_rev(gene), xend=gene, y=a1_diff, yend=a2_diff),color="grey") +
+  geom_hline(yintercept=0,lty=3) +
+  geom_point(aes(x=fct_rev(gene), y=nano_a1,col=id), alpha=0.5, size=3 ) +
+  geom_point(aes(x=fct_rev(gene), y=nano_a2, col=id), alpha=0.5, size=3 ) +
+  geom_point(aes(x=fct_rev(gene), y=strg_a1,col=id), alpha=0.5, size=3 ) +
+  geom_point(aes(x=fct_rev(gene), y=strg_a2, col=id), alpha=0.5, size=3 ) +
+  geom_point(aes(x=fct_rev(gene), y=min_path), pch=15, col="firebrick3", alpha=0.3, size=3 ) +
+  geom_point(aes(x=fct_rev(gene), y=max_normal), pch=15, col="dodgerblue3", alpha=0.3, size=3 ) +
+  scale_color_paletteer_d("lisa::AndyWarhol_2") +
+  coord_flip()+
+  theme_cowplot() +
+  theme(legend.position = "right") +
+  xlab("") +
+  ylab("Allele size ")
+
+p2 = p2temp + annotate("text", x=24, 540, label="pathogenic_min", col="firebrick3") + 
+  annotate("segment", x=24, xend=24, y=420, yend=320, col="firebrick3", arrow = arrow(type = "closed", length = unit(0.02, "npc")), alpha=0.6)+
+  annotate("text", x=21, 470, label="normal_max", col="dodgerblue3") + 
+  annotate("segment", x=21, xend=23.5, y=390, yend=260, col="dodgerblue3", arrow = arrow(type = "closed", length = unit(0.02, "npc")), alpha=0.6)
+save_plot('/nesi/nobackup/uoa04099/benchmarking_STRs/str_allele_sizes.pdf', p2, base_height=10, base_width=7)
+
+
+p3 = ggplot(df3) +
+  geom_segment(aes(x=fct_rev(gene), xend=gene, y=a1_diff, yend=a2_diff),color="grey") +
+  geom_hline(yintercept=0,lty=3) +
+  geom_point(aes(x=fct_rev(gene), y=nano_a1,col=id), alpha=0.5, size=3 ) +
+  geom_point(aes(x=fct_rev(gene), y=nano_a2, col=id), alpha=0.5, size=3 ) +
+  geom_point(aes(x=fct_rev(gene), y=strg_a1,col=id), alpha=0.5, size=3 ) +
+  geom_point(aes(x=fct_rev(gene), y=strg_a2, col=id), alpha=0.5, size=3 ) +
+  geom_point(aes(x=fct_rev(gene), y=min_path), pch=15, col="firebrick3", alpha=0.3, size=3 ) +
+  geom_point(aes(x=fct_rev(gene), y=max_normal), pch=15, col="dodgerblue3", alpha=0.3, size=3 ) +
+  scale_color_paletteer_d("lisa::AndyWarhol_2") +
+  coord_flip()+
+  theme_cowplot() +
+  theme(legend.position = "right") +
+  xlab("") +
+  ylab("Allele size ") + ylim(0,200) 
+
+save_plot('/nesi/nobackup/uoa04099/benchmarking_STRs/str_allele_sizes_trunc2.pdf', p3, base_height=10, base_width=7)
+p3
+
+```
+
+
+Make a plot that shows allele size and whether it falls into pathogenic or normal range
+This requires the STRchive database file, which has columns for min and max pathogenic and max normal.
+(I had just the pathogenic threshold and normal max, so needed to get this additional information from STRchive.)
+
+From the STRchive github (edited)
+# Load libraries, set theme & options
+```{r}
+
+library('plotly')
+library('ggplot2')
+library('cowplot')
+theme_set(theme_cowplot())
+options(stringsAsFactors = FALSE)
+
+```
+
+# Read in STRchive database files
+```{r}
+
+setwd("/nesi/nobackup/uoa04099/scripts/str-scripts/")
+
+disease.loci = read.csv('/nesi/nobackup/uoa04099/benchmarking_STRs/STRchive_data/STRchive-database.csv')
+
+fname_allele_size = '/nesi/nobackup/uoa04099/benchmarking_STRs/STRchive_data/STRchive_allele_size'
+fname_age_onset = '/nesi/nobackup/uoa04099/benchmarking_STRs/STRchive_data/STRchive_age_onset.html'
+
+```
+
+# From STRchive plot.Rmd: switch between units (from repeat unit length to bp)
+```{r}
+disease.loci$norm_min_bp = disease.loci$normal_min * disease.loci$repeatunitlen
+disease.loci$norm_max_bp = disease.loci$normal_max * disease.loci$repeatunitlen
+disease.loci$int_min_bp = disease.loci$intermediate_min * disease.loci$repeatunitlen
+disease.loci$int_max_bp = disease.loci$intermediate_max * disease.loci$repeatunitlen
+disease.loci$path_min_bp = disease.loci$pathogenic_min * disease.loci$repeatunitlen
+disease.loci$path_max_bp = disease.loci$pathogenic_max * disease.loci$repeatunitlen
+
+disease.loci$norm_min_bp[disease.loci$norm_min_bp == 0] = NA
+disease.loci$norm_max_bp[disease.loci$norm_max_bp == 0] = NA
+
+disease.loci$disease_id = reorder(disease.loci$disease_id, -disease.loci$path_min_bp)
+
+disease.loci = subset(disease.loci, !grepl("conflicting evidence", disease.loci$details))
+```
+
+# Merge the STRchive data into my data and plot
+# Plot nanoRepeat and straglr-epi2me together
+```{r}
+cols=paletteer_d("lisa::AndyWarhol_2", n = 5)
+
+#cols = c(HG002="#D32934FF", HG003="#2F191BFF", HG004="#2BAA92FF", Pathogenic="#D12E6CFF", Intermediate="#F4BCB9FF", Benign="dodgerblue3")
+
+#cols_indiv = c(HG002="#D32934FF", HG003="#2F191BFF", HG004="#2BAA92FF")
+cols_indiv = c(HG005="#D32934FF", HG006="#2F191BFF", HG007="#2BAA92FF")
+cols_effect = c(Pathogenic="firebrick3", Intermediate="#F4BCB9FF", Benign="dodgerblue3")
+
+df4 = left_join(df3, disease.loci, join_by(gene==gene))
+names(df4)[18]="id"
+
+p4 = ggplot(df4) +
+  #geom_segment(aes(x=fct_rev(gene), xend=gene, y=a1_diff, yend=a2_diff),color="grey") +
+  geom_hline(yintercept=0,lty=3) +
+  geom_linerange(aes(x=fct_rev(gene),ymin=path_min_bp, ymax=path_max_bp), color=cols_effect['Pathogenic'],lwd=3,alpha=0.1) +
+  geom_linerange(aes(x=fct_rev(gene),ymin = int_min_bp, ymax=int_max_bp), color=cols_effect['Intermediate'],lwd=3,alpha=0.1) +
+  geom_linerange(aes(x=fct_rev(gene),ymin = norm_min_bp, ymax = norm_max_bp), color=cols_effect['Benign'],lwd=3,alpha=0.1) +
+  scale_color_manual(values=cols_effect)+
+  geom_point(aes(x=fct_rev(gene), y=nano_a1,col=id), alpha=0.5, size=3 ) +
+  geom_point(aes(x=fct_rev(gene), y=nano_a2, col=id), alpha=0.5, size=3 ) +
+  geom_point(aes(x=fct_rev(gene), y=strg_a1,col=id), alpha=0.5, size=3 ) +
+  geom_point(aes(x=fct_rev(gene), y=strg_a2, col=id), alpha=0.5, size=3 ) +
+  scale_colour_manual(values=cols_indiv) + coord_flip() + 
+  theme_cowplot() + theme(legend.position = "right") +
+  xlab("") + ylab("Allele size ") + ylim(0,200) 
+
+save_plot('/nesi/nobackup/uoa04099/benchmarking_STRs/HG567_comparison.pdf', p4, base_height=10, base_width=7)
+p4
+
+
+```
+
+# TRIO PLOTS -- nanoRepeat
+```{r}
+cols=paletteer_d("lisa::AndyWarhol_2", n = 5)
+cols_effect = c(Pathogenic="firebrick3", Intermediate="#F4BCB9FF", Benign="dodgerblue3")
+
+#cols_indiv = c(HG002="#D32934FF", HG003="#2F191BFF", HG004="#2BAA92FF")
+#shapes_indiv = c(HG004=3,HG003=4,HG002=1)
+
+cols_indiv = c(HG005="#D32934FF", HG006="#2F191BFF", HG0074="#2BAA92FF")
+shapes_indiv = c(HG007=3,HG006=4,HG005=1)
+
+df4 = left_join(df3, disease.loci, join_by(gene==gene))
+names(df4)[18]="id"
+
+df5 = df4 %>% filter(id!='KOLF2')
+
+p5 = ggplot(df5) +
+  geom_hline(yintercept=0,lty=3) +
+  geom_linerange(data=disease.loci, aes(x=fct_rev(gene),ymin=path_min_bp, ymax=path_max_bp), color=cols_effect['Pathogenic'],lwd=3,alpha=0.3) +
+  geom_linerange(data=disease.loci, aes(x=fct_rev(gene),ymin = int_min_bp, ymax=int_max_bp), color=cols_effect['Intermediate'],lwd=3,alpha=0.3) +
+  geom_linerange(data=disease.loci, aes(x=fct_rev(gene),ymin = norm_min_bp, ymax = norm_max_bp), color=cols_effect['Benign'],lwd=3,alpha=0.3) +
+  scale_color_manual(values=cols_effect) + coord_flip() + 
+  geom_point(aes(x=fct_rev(gene), y=nano_a1,col=id, pch=id), alpha=0.5, size=3 ) +
+  geom_point(aes(x=fct_rev(gene), y=nano_a2, col=id, pch=id), alpha=0.5, size=3 ) +
+  scale_shape_manual(values=shapes_indiv) +
+  scale_colour_manual(values=cols_indiv) + coord_flip() + 
+  theme_cowplot() + theme(legend.position = "right") +
+  xlab("") + ylab("Allele size ") + ylim(0,200) + ggtitle("nanoRepeat Allele Sizes")
+
+save_plot('/nesi/nobackup/uoa04099/benchmarking_STRs/HG567_comparison_nanorepeat.pdf', p5, base_height=10, base_width=7)
+p5
+
+
+```
+
+# TRIO PLOTS -- EPI2ME
+```{r}
+cols=paletteer_d("lisa::AndyWarhol_2", n = 5)
+
+#cols = c(HG002="#D32934FF", HG003="#2F191BFF", HG004="#2BAA92FF", Pathogenic="#D12E6CFF", Intermediate="#F4BCB9FF", Benign="dodgerblue3")
+
+cols_indiv = c(HG002="#D32934FF", HG003="#2F191BFF", HG004="#2BAA92FF")
+cols_effect = c(Pathogenic="firebrick3", Intermediate="#F4BCB9FF", Benign="dodgerblue3")
+shapes_indiv = c(HG004=3,HG003=4,HG002=1) # circle=1, plus=3, cross=4 [circle should be offspring]
+
+df4 = left_join(df3, disease.loci, join_by(gene==gene))
+names(df4)[18]="id"
+
+df5 = df4 %>% filter(id!='KOLF2')
+
+p5 = ggplot(df5) +
+  geom_hline(yintercept=0,lty=3) +
+  geom_linerange(data=disease.loci, aes(x=fct_rev(gene),ymin=path_min_bp, ymax=path_max_bp), color=cols_effect['Pathogenic'],lwd=3,alpha=0.3) +
+  geom_linerange(data=disease.loci, aes(x=fct_rev(gene),ymin = int_min_bp, ymax=int_max_bp), color=cols_effect['Intermediate'],lwd=3,alpha=0.3) +
+  geom_linerange(data=disease.loci, aes(x=fct_rev(gene),ymin = norm_min_bp, ymax = norm_max_bp), color=cols_effect['Benign'],lwd=3,alpha=0.3) +
+  scale_color_manual(values=cols_effect) + coord_flip() + 
+  geom_point(aes(x=fct_rev(gene), y=strg_a1,col=id, pch=id), alpha=0.5, size=3 ) +
+  geom_point(aes(x=fct_rev(gene), y=strg_a2, col=id, pch=id), alpha=0.5, size=3 ) +
+  scale_shape_manual(values=shapes_indiv) +
+  scale_colour_manual(values=cols_indiv) + coord_flip() + 
+  theme_cowplot() + theme(legend.position = "right") +
+  xlab("") + ylab("Allele size ") + ylim(0,1000) + ggtitle("EPI2ME Allele Sizes")
+
+save_plot('/nesi/nobackup/uoa04099/benchmarking_STRs/HG567_comparison_epi2me.pdf', p5, base_height=10, base_width=7)
+p5
+
+
+```
+
+ 
+# TRIO PLOTS -- nanoRepeat, rescale
+```{r}
+
+curr_trio=c('HG005', 'HG006', 'HG007')
+plot_title = paste('Nanorepeat: ', paste(curr_trio[1], curr_trio[2], curr_trio[3], sep=','))
+
+cols=paletteer_d("lisa::AndyWarhol_2", n = 5)
+cols_effect = c(Pathogenic="firebrick3", Intermediate="#F4BCB9FF", Benign="dodgerblue3")
+
+cols_indiv = c(HG005="#D32934FF", HG006="#2F191BFF", HG0074="#2BAA92FF")
+
+shapes_indiv = c(HG005=1, HG006=4, HG007=3) # shape1=circle, shape3=plus, shape4=cross 
+                                            # HG005=son(circle), HG006=father(cross),HG007=mother(plus)
+
+df4 = left_join(df3, disease.loci, join_by(gene==gene))
+names(df4)[18]="id"
+
+df5 = df4 %>% filter(id %in% curr_trio) # select just our current trio
+df5 = df5 %>% mutate(nano_a1_dev = nano_a1-max_normal) %>% mutate(nano_a2_dev = nano_a2-max_normal)
+
+p5 = ggplot(df5) +
+  geom_hline(yintercept=0,lty=3) +
+  scale_color_manual(values=cols_effect) + coord_flip() + 
+  geom_point(aes(x=fct_rev(gene), y=nano_a1_dev,col=id, pch=id), alpha=0.5, size=3 ) +
+  geom_point(aes(x=fct_rev(gene), y=nano_a2_dev, col=id, pch=id), alpha=0.5, size=3 ) +
+  scale_shape_manual(values=shapes_indiv, labels=c("offspring", "father", "mother")) +
+  scale_colour_manual(values=cols_indiv) + guides(color = "none") + coord_flip() + 
+  theme_cowplot() + theme(legend.position = "right") +
+  xlab("") + ylab("Allele Size Deviation from Max Normal") + ylim(-200,200) + ggtitle(plot_title)
+
+save_plot('/nesi/nobackup/uoa04099/benchmarking_STRs/HG567_nanorepeat_maxnormal.pdf', p5, base_height=10, base_width=7)
+p5
+
+
+```
